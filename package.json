@@ -1,0 +1,10 @@
+{
+  "name": "statistical-workspace",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "node scripts/vendor.mjs",
+    "check": "node --check static/app.js && node --check scripts/vendor.mjs"
+  },
+  "dependencies": {"plotly.js-dist-min": "3.1.0"}
+}
