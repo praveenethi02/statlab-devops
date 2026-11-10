@@ -1,0 +1,3 @@
+.toolbar .search input:not([type]) { padding-left: 37px; }
+.mobile-logout { display: none; }
+@media (max-width: 800px) { .mobile-logout { display: inline-flex; } }

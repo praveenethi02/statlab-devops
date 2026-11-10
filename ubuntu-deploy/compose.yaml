@@ -1,0 +1,40 @@
+name: statlab
+services:
+  backend:
+    image: statlab-backend:ubuntu
+    build: ./backend
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      SERVE_FRONTEND: "false"
+      DATABASE_PATH: /data/accounts.sqlite3
+      APP_SECRET: ${APP_SECRET:?Run python3 setup_env.py --host YOUR_SERVER_IP first}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      COOKIE_SECURE: "false"
+    expose:
+      - "8000"
+    volumes:
+      - statlab-data:/data
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  frontend:
+    image: statlab-frontend:ubuntu
+    build: ./frontend
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  statlab-data:

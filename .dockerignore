@@ -1,0 +1,16 @@
+.git
+.idea
+.venv
+.runtime
+__pycache__
+*.pyc
+*.sqlite3*
+*.secret
+.env
+node_modules
+test-results
+output
+tmp
+static/vendor
+*.tar
+ubuntu-deploy

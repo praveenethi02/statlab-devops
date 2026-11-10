@@ -1,0 +1,27 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:8000:8000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      DATABASE_PATH: /data/accounts.sqlite3
+      APP_SECRET: ${APP_SECRET:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      TRUSTED_PROXY: ${TRUSTED_PROXY:-}
+    volumes:
+      - statlab-data:/data
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  statlab-data:
