@@ -1,0 +1,75 @@
+name: Application checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      APP_SECRET: statlab-ci-only-ephemeral-signing-key
+      COMPOSE_FILE: ubuntu-deploy/compose.yaml
+      COMPOSE_PROJECT_NAME: statlab-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements-dev.txt
+          npm ci
+          python -m playwright install --with-deps chromium
+      - name: Python code quality
+        run: python -m ruff check .
+      - name: Frontend syntax
+        run: npm run check
+      - name: Backend and statistical tests
+        run: python -m unittest discover -v
+      - name: Browser workflow
+        run: |
+          mkdir -p .runtime
+          python scripts/browser_test.py
+      - name: Build Docker images
+        run: |
+          python scripts/prepare_ubuntu.py
+          docker compose build
+      - name: Container health smoke test
+        run: |
+          if ! docker compose up -d --wait --wait-timeout 90; then
+            docker compose logs --tail=100 frontend backend
+            exit 1
+          fi
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --output /dev/null http://localhost:8080/ &&
+               curl --fail --silent --output /dev/null http://localhost:8080/api/health; then
+              break
+            fi
+            if [ "$attempt" -eq 20 ]; then
+              docker compose logs --tail=100 frontend backend
+              exit 1
+            fi
+            sleep 2
+          done
+          curl --fail http://localhost:8080/
+          curl --fail http://localhost:8080/api/health
+          curl --fail --output /dev/null http://localhost:8080/static/app.js
+          curl --fail --output /dev/null http://localhost:8080/static/vendor/plotly.min.js
+      - name: Stop Docker services
+        if: always()
+        run: docker compose down
+      - name: Browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-results
+          path: test-results/
+      # No remote deployment is configured. Enable deployment only after supplying
+      # an explicitly selected server, protected environment, and credentials.
