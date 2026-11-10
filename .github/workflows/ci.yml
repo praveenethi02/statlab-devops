@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   test-and-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       APP_SECRET: statlab-ci-only-ephemeral-signing-key
