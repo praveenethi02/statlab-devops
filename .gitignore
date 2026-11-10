@@ -1,0 +1,21 @@
+accounts.sqlite3*
+__pycache__/
+.venv/
+.runtime/
+.env
+.idea/
+node_modules/
+test-results/
+output/
+tmp/
+*.sqlite3*
+.ruff_cache/
+*.pyc
+*.secret
+
+# Exported Docker images (too large for GitHub; rebuild with docker compose build)
+*.tar
+# Backup of the previous local git history
+.git-old-backup/
+# Local environment files anywhere in the tree
+**/.env
