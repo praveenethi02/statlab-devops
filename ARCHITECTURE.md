@@ -15,9 +15,9 @@ The original project comprised `server.py`, `hrml`, `test_server.py`, and `accou
 | `reports.py` | Saved-analysis PDF generation, histogram, paginated tables and methodology |
 | `hrml`, `static/app.js`, `static/style.css` | Vanilla frontend with hash-routed pages and escaped HTML |
 | `static/vendor/` | Pinned Plotly library and license, installed by npm or built inside Docker |
-| `scripts/` | Browser workflow verification and explicit database maintenance |
+| `scripts/` | Browser workflow verification and Ubuntu package preparation |
 
-Flask and Waitress replace the development-only transport rather than the account model or frontend stack. Docker and Azure run separate Nginx, Python API and PostgreSQL tiers. Local development and tests use PostgreSQL. Plotly supports all requested charts, including box plots, and is served locally for offline LAN use. Numerical calculations use Python's standard library, avoiding a heavy NumPy/SciPy runtime where it is not needed.
+Flask and Waitress replace the development-only transport rather than the account model or frontend stack. Docker Compose runs separate Nginx, Python API and PostgreSQL services. Local development and tests use PostgreSQL. Plotly supports all requested charts, including box plots, and is served locally for offline LAN use. Numerical calculations use Python's standard library, avoiding a heavy NumPy/SciPy runtime where it is not needed.
 
 ## Storage model
 

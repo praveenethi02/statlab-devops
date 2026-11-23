@@ -44,7 +44,7 @@ Create a fresh PostgreSQL dump before updates or host migration.
 docker compose exec -T database pg_dump -U statlab -d statlab -Fc > statlab-backup.dump
 ```
 
-Restore into a fresh database using `pg_restore`. Keep backups outside the repository and protect them as application data. Azure deployments use managed PostgreSQL backups as described in [the Azure pipeline guide](../infra/README.md).
+Restore into a fresh database using `pg_restore`. Keep backups outside the repository and protect them as application data.
 
 ## Refresh this package
 

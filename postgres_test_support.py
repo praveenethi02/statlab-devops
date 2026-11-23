@@ -1,10 +1,10 @@
 """Create isolated PostgreSQL schemas for test runs."""
 import os
 import secrets
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import psycopg
 from psycopg import sql
-from psycopg.conninfo import make_conninfo
 
 
 class PostgresTestSchemas:
@@ -21,7 +21,13 @@ class PostgresTestSchemas:
             sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(schema))
         )
         self.schemas.append(schema)
-        return make_conninfo(self.base_url, options=f'-c search_path={schema}')
+        parts = urlsplit(self.base_url)
+        query = parse_qsl(parts.query, keep_blank_values=True)
+        query.append(('options', f'-c search_path={schema}'))
+        query_string = urlencode(query, quote_via=quote)
+        return urlunsplit(
+            (parts.scheme, parts.netloc, parts.path, query_string, parts.fragment)
+        )
 
     def close(self):
         for schema in reversed(self.schemas):

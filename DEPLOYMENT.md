@@ -1,10 +1,10 @@
-# Docker, Ubuntu, and Azure deployment
+# Local and Ubuntu setup
 
-The repository provides a three-service Docker Compose setup for local development and Ubuntu, plus separate Terraform and Ansible automation for Azure. PostgreSQL stores application records in its own persistent volume. The frontend and API build as independent images.
+The application uses PostgreSQL. Docker Compose provides the frontend, API, and database for local development.
 
-## Start the local application
+## Run locally with Docker Compose
 
-Copy `.env.example` to `.env`, set independent random values for `APP_SECRET` and `POSTGRES_PASSWORD`, and retain the default loopback-only PostgreSQL port.
+Copy `.env.example` to `.env`, set separate values for `APP_SECRET` and `POSTGRES_PASSWORD`, then start the services:
 
 ```powershell
 Copy-Item .env.example .env
@@ -13,20 +13,16 @@ docker compose ps
 Invoke-RestMethod http://localhost:8080/api/health
 ```
 
-Open **http://localhost:8080**. PostgreSQL listens on loopback port 5433 by default. Nginx is published on port 8080. The API reaches PostgreSQL on the private Compose network.
+Open **http://localhost:8080**. PostgreSQL is published on loopback port 5433 by default and persists data in the `postgres-data` volume. Keep `.env` and database backups out of Git.
 
-## Build and transfer images
+## Run the API directly
 
-Build the frontend and API images independently with `docker compose build frontend backend`. To transfer them, save each image with `docker image save`, load it on the target Linux Docker host, and start the Compose file with `docker compose up -d --no-build`. Keep the destination `.env` and the PostgreSQL data volume separate from image archives.
+Start the Compose database, set `DATABASE_URL` and `APP_SECRET` as described in the README, then run `python server.py`. Tests use the PostgreSQL database named by `DATABASE_URL` and create temporary schemas for isolation.
 
-## Ubuntu
+## Ubuntu package
 
-Use the self-contained [Ubuntu deployment package](ubuntu-deploy/README.md). It includes the backend, frontend, Compose configuration, and PostgreSQL schema.
+The self-contained [Ubuntu deployment package](ubuntu-deploy/README.md) includes separate frontend and backend build contexts, Compose configuration, and the PostgreSQL schema.
 
 ## Database backups
 
-Make PostgreSQL logical backups with `pg_dump` and restore them with `pg_restore` into a fresh database. Preserve the `postgres-data` volume and the signing secret when upgrading a host installation.
-
-## Azure CI/CD
-
-Follow the [Jenkins, Terraform and Ansible guide](infra/README.md) to configure remote Terraform state, Jenkins credentials, container registry access, Azure identity, and deployment.
+Use `pg_dump` to create logical PostgreSQL backups and restore them into a fresh database with `pg_restore`. Plan any transfer from an existing SQLite installation separately before replacing a live system.

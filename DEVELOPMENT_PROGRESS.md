@@ -49,7 +49,7 @@
 - Final combined suite: 50 tests passed in 20.746 seconds. Ruff, JavaScript syntax checks, and ten browser workflow groups passed. Additional targeted CSV/PDF regressions passed after export formatting fixes.
 - Production `python server.py` started with Waitress and the actual migrated database; `/` and `/api/health` returned HTTP 200. Local preview was queued in Codex, and the temporary server was stopped after verification. Use the README command to run it again.
 - Local Docker Desktop builds and container health passed on 2026-10-13. Ubuntu deployment, second-computer LAN access, and hosted GitHub Actions execution remain unverified. Deployment configuration and instructions are supplied.
-- No remote deployment or cloud service used; authoritative data remains in the existing SQLite architecture.
+- No remote deployment or cloud service was used during this earlier SQLite phase. The application has since moved to PostgreSQL; this log records the earlier implementation history.
 
 ## Docker update - 2026-10-13
 

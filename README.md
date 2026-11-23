@@ -2,8 +2,6 @@
 
 A Python application backed by PostgreSQL, with separate frontend and backend deployments and a responsive HTML/CSS/JavaScript frontend.
 
-See the [Azure Jenkins, Terraform and Ansible setup](infra/README.md).
-
 The account schema, PBKDF2 password hash format, session tokens, remember-me behavior, and `python server.py` launch command are retained. The application requires `DATABASE_URL` and `APP_SECRET`. Plan a data migration before replacing any existing installation. Flask handles routing and validation; Waitress serves the application on Windows or Ubuntu.
 
 ## Run locally
@@ -94,6 +92,6 @@ After source or Dockerfile changes, run `docker compose up --build -d` again. `d
 
 Quartiles/percentiles use type-7 linear interpolation. Skewness and excess kurtosis use sample bias corrections. Z-scores use population spread. CV uses sample spread divided by the absolute mean. Missing selected values are rejected unless explicitly dropped; paired analysis drops whole pairs. Undefined results are null with explanations.
 
-Limits: 2 MB request/upload size; 10,000 rows or expanded frequencies; 32 columns; 100,000 cells. Nonzero numerical magnitudes must lie between `1e-100` and `1e100` to keep squared statistics within floating-point range. Class-interval results are estimates. No email verification, password reset service, or shared workspaces are configured. Azure deployment requires the Jenkins and cloud resources described in the infrastructure guide. PDF reports include a generated histogram; other chart types export separately as PNG. Long observation arrays and frequency tables are summarized in PDF and remain complete in CSV.
+Limits: 2 MB request/upload size; 10,000 rows or expanded frequencies; 32 columns; 100,000 cells. Nonzero numerical magnitudes must lie between `1e-100` and `1e100` to keep squared statistics within floating-point range. Class-interval results are estimates. No email verification, password reset service, or shared workspaces are configured. PDF reports include a generated histogram; other chart types export separately as PNG. Long observation arrays and frequency tables are summarized in PDF and remain complete in CSV.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md), [API_DOCUMENTATION.md](API_DOCUMENTATION.md), [DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md), and [TEST_REPORT.md](TEST_REPORT.md).
