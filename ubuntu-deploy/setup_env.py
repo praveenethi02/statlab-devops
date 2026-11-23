@@ -28,7 +28,7 @@ def main():
     try:
         with target.open('x', encoding='utf-8', newline='\n') as output:
             target.chmod(0o600)
-            output.write(f'APP_SECRET={secrets.token_hex(32)}\nALLOWED_HOSTS={hosts}\nBIND_ADDRESS=0.0.0.0\nHTTP_PORT={args.port}\n')
+            output.write(f'APP_SECRET={secrets.token_hex(32)}\nPOSTGRES_PASSWORD={secrets.token_hex(32)}\nPOSTGRES_PORT=5433\nALLOWED_HOSTS={hosts}\nBIND_ADDRESS=0.0.0.0\nHTTP_PORT={args.port}\n')
     except FileExistsError:
         parser.error('.env already exists; edit it in place to preserve the signing key.')
     print(f'Created {target.name}. Allowed hosts: {hosts}. HTTP port: {args.port}.')

@@ -1,6 +1,6 @@
 # API documentation
 
-Responses are JSON except HTML/static files and successful CSV/PDF downloads. Errors use `{"error":"human readable explanation"}`. Common statuses: 200 success, 201 created, 400 validation, 401 sign-in required/invalid credentials, 403 host/origin/CSRF failure, 404 missing or foreign-owned resource, 409 duplicate account/revision conflict, 413 body limit, 415 JSON required, 429 rate limit, 503 SQLite unavailable.
+Responses are JSON except HTML/static files and successful CSV/PDF downloads. Errors use `{"error":"human readable explanation"}`. Common statuses: 200 success, 201 created, 400 validation, 401 sign-in required/invalid credentials, 403 host/origin/CSRF failure, 404 missing or foreign-owned resource, 409 duplicate account/revision conflict, 413 body limit, 415 JSON required, 429 rate limit, 503 PostgreSQL unavailable.
 
 ## Cookies and CSRF
 

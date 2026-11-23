@@ -9,7 +9,6 @@ import os
 import re
 import secrets
 import signal
-import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,28 +56,24 @@ def create_app(config=None):
     app = Flask(__name__, static_folder='static' if serve_frontend else None)
     app.json.sort_keys = False
     app.config.update(
-        DATABASE=os.environ.get('DATABASE_PATH', str(ROOT / 'accounts.sqlite3')),
+        DATABASE_URL=os.environ.get('DATABASE_URL'),
+        PUBLIC_ORIGIN=os.environ.get('PUBLIC_ORIGIN'),
         MAX_CONTENT_LENGTH=2 * 1024 * 1024,
         COOKIE_SECURE=os.environ.get('COOKIE_SECURE', 'false').lower() == 'true',
         ALLOWED_HOSTS=os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(','),
         SECRET_KEY=os.environ.get('APP_SECRET'),
     )
     app.config.update(config or {})
-    database.initialize(app.config['DATABASE'])
+    if not app.config['DATABASE_URL']:
+        raise ValueError('DATABASE_URL is required.')
     if not app.config['SECRET_KEY']:
-        key_path = Path(app.config['DATABASE']).with_suffix('.secret')
-        try:
-            with key_path.open('x', encoding='utf-8') as key_file:
-                key_file.write(secrets.token_hex(32))
-            key_path.chmod(0o600)
-        except FileExistsError:
-            pass
-        app.config['SECRET_KEY'] = key_path.read_text(encoding='utf-8').strip()
+        raise ValueError('APP_SECRET is required.')
+    database.initialize(app.config['DATABASE_URL'])
     signer = URLSafeTimedSerializer(app.config['SECRET_KEY'], salt='workspace-csrf-v1')
 
     def db():
         if 'db' not in g:
-            g.db = database.connect(app.config['DATABASE'])
+            g.db = database.connect(app.config['DATABASE_URL'])
         return g.db
 
     @app.teardown_appcontext
@@ -109,7 +104,7 @@ def create_app(config=None):
             g.csrf = signer.dumps(secrets.token_urlsafe(24))
         if request.method not in ('GET', 'HEAD', 'OPTIONS'):
             origin = request.headers.get('Origin')
-            if origin and origin != request.host_url.rstrip('/'):
+            if origin and origin != (app.config['PUBLIC_ORIGIN'] or request.host_url.rstrip('/')):
                 return error('Request origin is not allowed.', 403)
             supplied = request.headers.get('X-CSRF-Token', '')
             if not supplied or not hmac.compare_digest(supplied, g.csrf):
@@ -145,7 +140,7 @@ def create_app(config=None):
             response.headers['Retry-After'] = '900'
         return response, status
 
-    @app.errorhandler(sqlite3.Error)
+    @app.errorhandler(database.PostgresError)
     def database_error(exc):
         app.logger.exception('Database operation failed')
         return error('The database is busy or unavailable. Please try again.', 503)
@@ -202,7 +197,7 @@ def create_app(config=None):
         data = json.loads(output.pop('data_json'))
         output['observation_count'] = len(data['rows']) if data['kind'] == 'raw' else sum(int(number(r[-1])) for r in data['rows'])
         output['kind'], output['columns'] = data['kind'], data['columns']
-        output['analysis_count'] = db().execute('SELECT COUNT(*) FROM analyses WHERE dataset_id=?', (row['id'],)).fetchone()[0]
+        output['analysis_count'] = db().execute('SELECT COUNT(*) AS total FROM analyses WHERE dataset_id=?', (row['id'],)).fetchone()['total']
         if full:
             output['data'], output['parameters'] = data, parameters(row['id'])
         return output
@@ -222,10 +217,10 @@ def create_app(config=None):
         connection, timestamp = db(), time.time()
         ip = hashlib.sha256(('ip:' + (request.remote_addr or '')).encode()).hexdigest()
         account = hashlib.sha256(('account:' + identifier.casefold()).encode()).hexdigest()
-        with connection:
+        with database.transaction(connection):
             connection.execute('DELETE FROM login_attempts WHERE attempted_at<?', (timestamp-900,))
             for key, limit in [(ip, 30)] + ([(account, 10)] if identifier else []):
-                count = connection.execute('SELECT COUNT(*) FROM login_attempts WHERE key=? AND attempted_at>?', (key, timestamp-900)).fetchone()[0]
+                count = connection.execute('SELECT COUNT(*) AS total FROM login_attempts WHERE key=? AND attempted_at>?', (key, timestamp-900)).fetchone()['total']
                 if count >= limit:
                     raise TooManyRequests('Too many account attempts. Try again in 15 minutes.')
             for key in [ip] + ([account] if identifier else []):
@@ -262,10 +257,10 @@ def create_app(config=None):
         rate_limit()
         salt = secrets.token_bytes(16)
         try:
-            with db():
+            with database.transaction(db()):
                 db().execute('INSERT INTO users(username,email,salt,password_hash) VALUES (?,?,?,?)',
                              (username, email, salt, password_hash(password, salt)))
-        except sqlite3.IntegrityError:
+        except database.INTEGRITY_ERRORS:
             return error('That username or email is already registered.', 409)
         return jsonify(ok=True), 201
 
@@ -275,14 +270,14 @@ def create_app(config=None):
         identifier = text_field(data, 'identifier', 254, True)
         password = password_field(data, 'password')
         rate_limit(identifier)
-        user = db().execute('SELECT * FROM users WHERE username=? OR email=?', (identifier, identifier)).fetchone()
+        user = db().execute('SELECT * FROM users WHERE lower(username)=lower(?) OR lower(email)=lower(?)', (identifier, identifier)).fetchone()
         digest = password_hash(password, user['salt'] if user else bytes(16))
         if not user or not hmac.compare_digest(digest, user['password_hash']):
             return error('Incorrect username, email, or password.', 401)
         token = secrets.token_urlsafe(32)
         remember = data.get('remember') is True
         lifetime = 30*86400 if remember else 12*3600
-        with db():
+        with database.transaction(db()):
             db().execute('DELETE FROM sessions WHERE expires<=? OR token_hash=?', (time.time(), token_hash()))
             db().execute('INSERT INTO sessions VALUES (?,?,?)', (hashlib.sha256(token.encode()).hexdigest(), user['id'], time.time()+lifetime))
         response = jsonify(user={'username': user['username'], 'email': user['email']}, csrf_token=g.csrf)
@@ -291,7 +286,7 @@ def create_app(config=None):
 
     @app.post('/api/logout')
     def logout():
-        with db():
+        with database.transaction(db()):
             db().execute('DELETE FROM sessions WHERE token_hash=?', (token_hash(),))
         response = jsonify(ok=True)
         set_cookie(response, 'session', '', 0)
@@ -309,7 +304,7 @@ def create_app(config=None):
         if not hmac.compare_digest(password_hash(data['current_password'], user['salt']), user['password_hash']):
             return error('Current password is incorrect.', 401)
         salt = secrets.token_bytes(16)
-        with db():
+        with database.transaction(db()):
             db().execute('UPDATE users SET salt=?, password_hash=? WHERE id=?', (salt, password_hash(data['new_password'], salt), user['id']))
             db().execute('DELETE FROM sessions WHERE user_id=?', (user['id'],))
         response = jsonify(ok=True)
@@ -319,8 +314,8 @@ def create_app(config=None):
     @app.get('/api/datasets')
     def list_datasets():
         search = request.args.get('search', '').strip()[:120]
-        sort = {'updated': 'updated_at DESC', 'created': 'created_at DESC', 'name': 'name COLLATE NOCASE'}.get(request.args.get('sort'), 'updated_at DESC')
-        rows = db().execute(f'SELECT * FROM datasets WHERE user_id=? AND (instr(lower(name),lower(?))>0 OR instr(lower(description),lower(?))>0) ORDER BY {sort}', (g.user['id'], search, search)).fetchall()
+        sort = {'updated': 'updated_at DESC', 'created': 'created_at DESC', 'name': 'lower(name)'}.get(request.args.get('sort'), 'updated_at DESC')
+        rows = db().execute(f'SELECT * FROM datasets WHERE user_id=? AND (strpos(lower(name),lower(?))>0 OR strpos(lower(description),lower(?))>0) ORDER BY {sort}', (g.user['id'], search, search)).fetchall()
         return jsonify(datasets=[dataset_json(row, False) for row in rows])
 
     def input_dataset(data):
@@ -335,9 +330,9 @@ def create_app(config=None):
     def create_dataset():
         name, description, data = input_dataset(body())
         timestamp = now()
-        with db():
-            cursor = db().execute('INSERT INTO datasets(user_id,name,description,data_json,created_at,updated_at) VALUES (?,?,?,?,?,?)', (g.user['id'], name, description, encode(data), timestamp, timestamp))
-        return jsonify(dataset=dataset_json(owned_dataset(cursor.lastrowid))), 201
+        with database.transaction(db()):
+            new_id = db().execute('INSERT INTO datasets(user_id,name,description,data_json,created_at,updated_at) VALUES (?,?,?,?,?,?) RETURNING id', (g.user['id'], name, description, encode(data), timestamp, timestamp)).fetchone()['id']
+        return jsonify(dataset=dataset_json(owned_dataset(new_id))), 201
 
     @app.get('/api/datasets/<int:identifier>')
     def get_dataset(identifier):
@@ -351,7 +346,7 @@ def create_app(config=None):
         if type(payload.get('revision')) is not int or payload['revision'] != original['revision']:
             return error('This dataset changed in another window. Reopen it before saving.', 409)
         changed = encode(data) != original['data_json']
-        with db():
+        with database.transaction(db()):
             cursor = db().execute('UPDATE datasets SET name=?,description=?,data_json=?,revision=revision+?,updated_at=? WHERE id=? AND user_id=? AND revision=?', (name, description, encode(data), int(changed), now(), identifier, g.user['id'], payload['revision']))
         if cursor.rowcount != 1:
             return error('This dataset changed in another window. Reopen it before saving.', 409)
@@ -360,7 +355,7 @@ def create_app(config=None):
     @app.delete('/api/datasets/<int:identifier>')
     def delete_dataset(identifier):
         owned_dataset(identifier)
-        with db():
+        with database.transaction(db()):
             db().execute('DELETE FROM datasets WHERE id=? AND user_id=?', (identifier, g.user['id']))
         return jsonify(ok=True)
 
@@ -368,11 +363,11 @@ def create_app(config=None):
     def duplicate_dataset(identifier):
         row = owned_dataset(identifier)
         timestamp = now()
-        with db():
-            cursor = db().execute('INSERT INTO datasets(user_id,name,description,data_json,created_at,updated_at) VALUES (?,?,?,?,?,?)', (g.user['id'], row['name'][:110]+' (copy)', row['description'], row['data_json'], timestamp, timestamp))
+        with database.transaction(db()):
+            new_id = db().execute('INSERT INTO datasets(user_id,name,description,data_json,created_at,updated_at) VALUES (?,?,?,?,?,?) RETURNING id', (g.user['id'], row['name'][:110]+' (copy)', row['description'], row['data_json'], timestamp, timestamp)).fetchone()['id']
             db().execute('''INSERT INTO custom_parameters(dataset_id,name,value_json,unit,formula,description,created_at,updated_at)
-                SELECT ?,name,value_json,unit,formula,description,?,? FROM custom_parameters WHERE dataset_id=? AND analysis_id IS NULL''', (cursor.lastrowid, timestamp, timestamp, identifier))
-        return jsonify(dataset=dataset_json(owned_dataset(cursor.lastrowid))), 201
+                SELECT ?,name,value_json,unit,formula,description,?,? FROM custom_parameters WHERE dataset_id=? AND analysis_id IS NULL''', (new_id, timestamp, timestamp, identifier))
+        return jsonify(dataset=dataset_json(owned_dataset(new_id))), 201
 
     @app.post('/api/import/csv')
     def import_csv():
@@ -451,9 +446,9 @@ def create_app(config=None):
         if payload.get('dataset_revision') != row['revision']:
             return error('The dataset changed. Recalculate before saving this analysis.', 409)
         snapshot = {'name': row['name'], 'description': row['description'], 'data': json.loads(row['data_json'])}
-        with db():
-            cursor = db().execute('INSERT INTO analyses(user_id,dataset_id,name,dataset_revision,dataset_snapshot,result_json,created_at) VALUES (?,?,?,?,?,?,?)', (g.user['id'], row['id'], name, row['revision'], encode(snapshot), encode(result), now()))
-        return jsonify(analysis=analysis_json(owned_analysis(cursor.lastrowid))), 201
+        with database.transaction(db()):
+            new_id = db().execute('INSERT INTO analyses(user_id,dataset_id,name,dataset_revision,dataset_snapshot,result_json,created_at) VALUES (?,?,?,?,?,?,?) RETURNING id', (g.user['id'], row['id'], name, row['revision'], encode(snapshot), encode(result), now())).fetchone()['id']
+        return jsonify(analysis=analysis_json(owned_analysis(new_id))), 201
 
     @app.get('/api/analyses/<int:identifier>')
     def get_analysis(identifier):
@@ -462,7 +457,7 @@ def create_app(config=None):
     @app.delete('/api/analyses/<int:identifier>')
     def delete_analysis(identifier):
         owned_analysis(identifier)
-        with db():
+        with database.transaction(db()):
             db().execute('DELETE FROM analyses WHERE id=? AND user_id=?', (identifier, g.user['id']))
         return jsonify(ok=True)
 
@@ -470,11 +465,11 @@ def create_app(config=None):
     def duplicate_analysis(identifier):
         row = owned_analysis(identifier)
         timestamp = now()
-        with db():
-            cursor = db().execute('INSERT INTO analyses(user_id,dataset_id,name,dataset_revision,dataset_snapshot,result_json,created_at) VALUES (?,?,?,?,?,?,?)', (g.user['id'], row['dataset_id'], row['name'][:110]+' (copy)', row['dataset_revision'], row['dataset_snapshot'], row['result_json'], timestamp))
+        with database.transaction(db()):
+            new_id = db().execute('INSERT INTO analyses(user_id,dataset_id,name,dataset_revision,dataset_snapshot,result_json,created_at) VALUES (?,?,?,?,?,?,?) RETURNING id', (g.user['id'], row['dataset_id'], row['name'][:110]+' (copy)', row['dataset_revision'], row['dataset_snapshot'], row['result_json'], timestamp)).fetchone()['id']
             db().execute('''INSERT INTO custom_parameters(dataset_id,analysis_id,name,value_json,unit,formula,description,created_at,updated_at)
-                SELECT dataset_id,?,name,value_json,unit,formula,description,?,? FROM custom_parameters WHERE analysis_id=?''', (cursor.lastrowid, timestamp, timestamp, identifier))
-        return jsonify(analysis=analysis_json(owned_analysis(cursor.lastrowid))), 201
+                SELECT dataset_id,?,name,value_json,unit,formula,description,?,? FROM custom_parameters WHERE analysis_id=?''', (new_id, timestamp, timestamp, identifier))
+        return jsonify(analysis=analysis_json(owned_analysis(new_id))), 201
 
     def parameter_values(payload, dataset_id):
         name = text_field(payload, 'name', 120, True)
@@ -498,10 +493,10 @@ def create_app(config=None):
         owned_dataset(identifier)
         values = parameter_values(body(), identifier)
         timestamp = now()
-        with db():
-            cursor = db().execute('INSERT INTO custom_parameters(dataset_id,analysis_id,name,value_json,unit,formula,description,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)', (identifier, *values, timestamp, timestamp))
+        with database.transaction(db()):
+            new_id = db().execute('INSERT INTO custom_parameters(dataset_id,analysis_id,name,value_json,unit,formula,description,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?) RETURNING id', (identifier, *values, timestamp, timestamp)).fetchone()['id']
             db().execute('UPDATE datasets SET updated_at=? WHERE id=?', (timestamp, identifier))
-        return jsonify(parameter=next(p for p in parameters(identifier) if p['id'] == cursor.lastrowid)), 201
+        return jsonify(parameter=next(p for p in parameters(identifier) if p['id'] == new_id)), 201
 
     def owned_parameter(identifier):
         row = db().execute('''SELECT custom_parameters.* FROM custom_parameters JOIN datasets ON datasets.id=dataset_id
@@ -514,14 +509,14 @@ def create_app(config=None):
     def edit_parameter(identifier):
         row = owned_parameter(identifier)
         values = parameter_values(body(), row['dataset_id'])
-        with db():
+        with database.transaction(db()):
             db().execute('UPDATE custom_parameters SET analysis_id=?,name=?,value_json=?,unit=?,formula=?,description=?,updated_at=? WHERE id=?', (*values, now(), identifier))
         return jsonify(parameter=next(p for p in parameters(row['dataset_id']) if p['id'] == identifier))
 
     @app.delete('/api/parameters/<int:identifier>')
     def delete_parameter(identifier):
         owned_parameter(identifier)
-        with db():
+        with database.transaction(db()):
             db().execute('DELETE FROM custom_parameters WHERE id=?', (identifier,))
         return jsonify(ok=True)
 

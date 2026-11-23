@@ -1,0 +1,48 @@
+- name: Release StatLab application images
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    group: "{{ lookup('env', 'STATLAB_RESOURCE_GROUP') }}"
+    registry: "{{ lookup('env', 'REGISTRY_HOST') }}"
+    tag: "{{ lookup('env', 'RELEASE_TAG') }}"
+    site: "{{ lookup('env', 'STATLAB_URL') }}"
+  tasks:
+    - name: Read the deployed image for each application
+      ansible.builtin.command:
+        argv: [az, containerapp, show, --resource-group, "{{ group }}", --name, "{{ item }}",
+               --query, "properties.template.containers[0].image", --output, tsv]
+      loop: [backend, frontend]
+      register: deployed
+      changed_when: false
+
+    - name: Roll out changed images starting with the API
+      ansible.builtin.command:
+        argv: [az, containerapp, update, --resource-group, "{{ group }}", --name, "{{ item.item }}",
+               --image, "{{ registry }}/statlab-{{ item.item }}:{{ tag }}", --output, none]
+      loop: "{{ deployed.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.stdout != registry ~ '/statlab-' ~ item.item ~ ':' ~ tag
+      changed_when: true
+
+    - name: Wait for each latest revision to become ready
+      ansible.builtin.command:
+        argv: [az, containerapp, show, --resource-group, "{{ group }}", --name, "{{ item }}",
+               --query, "properties.latestReadyRevisionName == properties.latestRevisionName", --output, tsv]
+      loop: [backend, frontend]
+      register: ready
+      until: ready.stdout | lower == 'true'
+      retries: 45
+      delay: 5
+      changed_when: false
+
+    - name: Check the public frontend and database-backed API
+      ansible.builtin.uri:
+        url: "{{ site }}{{ item }}"
+        status_code: 200
+      loop: ["/", "/api/health"]
+      register: health
+      retries: 12
+      delay: 5
+      until: health is succeeded

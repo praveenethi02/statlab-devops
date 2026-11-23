@@ -19,3 +19,8 @@ tmp/
 .git-old-backup/
 # Local environment files anywhere in the tree
 **/.env
+
+.terraform/
+*.tfstate*
+*.tfplan
+*.tfvars

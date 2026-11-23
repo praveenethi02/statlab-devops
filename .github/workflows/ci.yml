@@ -9,8 +9,24 @@ jobs:
   test-and-build:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: statlab
+          POSTGRES_USER: statlab
+          POSTGRES_PASSWORD: statlab-ci-only-ephemeral-db-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U statlab -d statlab"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
     env:
       APP_SECRET: statlab-ci-only-ephemeral-signing-key
+      POSTGRES_PASSWORD: statlab-ci-only-ephemeral-db-password
+      DATABASE_URL: postgresql://statlab:statlab-ci-only-ephemeral-db-password@127.0.0.1:5432/statlab
       COMPOSE_FILE: ubuntu-deploy/compose.yaml
       COMPOSE_PROJECT_NAME: statlab-ci
     steps:

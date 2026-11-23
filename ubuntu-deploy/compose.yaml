@@ -1,20 +1,43 @@
 name: statlab
 services:
+  database:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: statlab
+      POSTGRES_USER: statlab
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U statlab -d statlab"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
   backend:
-    image: statlab-backend:ubuntu
+    image: ${STATLAB_BACKEND_IMAGE:-statlab-backend:ubuntu}
     build: ./backend
     environment:
       HOST: 0.0.0.0
       PORT: 8000
       SERVE_FRONTEND: "false"
-      DATABASE_PATH: /data/accounts.sqlite3
+      DATABASE_URL: postgresql:///statlab
+      PGHOST: database
+      PGUSER: statlab
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       APP_SECRET: ${APP_SECRET:?Run python3 setup_env.py --host YOUR_SERVER_IP first}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
       COOKIE_SECURE: "false"
     expose:
       - "8000"
-    volumes:
-      - statlab-data:/data
+    networks: [web, data]
+    depends_on:
+      database:
+        condition: service_healthy
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
@@ -27,8 +50,9 @@ services:
       - ALL
 
   frontend:
-    image: statlab-frontend:ubuntu
+    image: ${STATLAB_FRONTEND_IMAGE:-statlab-frontend:ubuntu}
     build: ./frontend
+    networks: [web]
     ports:
       - "${BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-8080}:80"
     depends_on:
@@ -37,4 +61,9 @@ services:
     restart: unless-stopped
 
 volumes:
-  statlab-data:
+  postgres-data:
+
+networks:
+  web:
+  data:
+    internal: true

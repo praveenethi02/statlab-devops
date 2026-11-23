@@ -2,7 +2,6 @@
 import json
 import os
 import sys
-import tempfile
 import threading
 from pathlib import Path
 
@@ -10,6 +9,7 @@ from playwright.sync_api import expect, sync_playwright
 from waitress import create_server
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from postgres_test_support import PostgresTestSchemas  # noqa: E402
 from server import create_app  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,8 +22,8 @@ if os.name == 'nt' and 'PLAYWRIGHT_BROWSERS_PATH' not in os.environ:
 def main():
     checks = []
     errors = []
-    with tempfile.TemporaryDirectory(dir=ROOT / '.runtime') as folder:
-        app = create_app({'DATABASE':str(Path(folder)/'browser.sqlite3'), 'SECRET_KEY':'browser-test-only'})
+    with PostgresTestSchemas() as schemas:
+        app = create_app({'DATABASE_URL':schemas.create(), 'SECRET_KEY':'browser-test-only'})
         server = create_server(app, host='127.0.0.1', port=0, threads=4)
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()

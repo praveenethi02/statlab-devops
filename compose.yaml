@@ -1,5 +1,22 @@
-
 services:
+  database:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: statlab
+      POSTGRES_USER: statlab
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U statlab -d statlab"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
   backend:
     image: statlab-backend:latest
     build:
@@ -8,15 +25,20 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8000
-      DATABASE_PATH: /data/accounts.sqlite3
+      DATABASE_URL: postgresql:///statlab
+      PGHOST: database
+      PGUSER: statlab
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET in .env}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
       TRUSTED_PROXY: ${TRUSTED_PROXY:-}
     expose:
       - "8000"
-    volumes:
-      - statlab-data:/data
+    networks: [web, data]
+    depends_on:
+      database:
+        condition: service_healthy
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
@@ -33,6 +55,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+    networks: [web]
     ports:
       - "${BIND_ADDRESS:-0.0.0.0}:8080:80"
     depends_on:
@@ -41,4 +64,9 @@ services:
     restart: unless-stopped
 
 volumes:
-  statlab-data:
+  postgres-data:
+
+networks:
+  web:
+  data:
+    internal: true

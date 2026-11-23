@@ -22,9 +22,9 @@ def main():
     for source in sorted((ROOT / 'static').rglob('*')):
         if source.is_file() and 'vendor' not in source.relative_to(ROOT / 'static').parts:
             copy(source.relative_to(ROOT), Path('frontend') / source.relative_to(ROOT))
-    for name in ('server.py', 'app_backend.py', 'database.py', 'statistics_engine.py', 'reports.py', 'requirements.txt', 'scripts/maintenance.py'):
+    for name in ('server.py', 'app_backend.py', 'database.py', 'statistics_engine.py', 'reports.py', 'requirements.txt'):
         copy(name, 'backend/' + name)
-    for source in sorted((ROOT / 'migrations').glob('*.sql')):
+    for source in sorted((ROOT / 'database' / 'postgresql').glob('*.sql')):
         copy(source.relative_to(ROOT), Path('backend') / source.relative_to(ROOT))
     files.extend(BUNDLE / name for name in (
         'compose.yaml', '.env.example', 'setup_env.py', 'README.md',

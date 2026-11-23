@@ -1,31 +1,28 @@
 """Original account assertions plus platform persistence and security regressions."""
 import hashlib
 import io
-import sqlite3
-import tempfile
 import unittest
 from contextlib import closing
-from pathlib import Path
 
 from pypdf import PdfReader
 from werkzeug.test import EnvironBuilder
 
 import database
+from postgres_test_support import PostgresTestSchemas
 from server import create_app, password_hash
 
 
 class PlatformTests(unittest.TestCase):
     def setUp(self):
-        Path('.runtime').mkdir(exist_ok=True)
-        self.folder = tempfile.TemporaryDirectory(dir='.runtime')
-        self.path = str(Path(self.folder.name)/'test.sqlite3')
-        self.config = {'DATABASE':self.path, 'TESTING':True, 'SECRET_KEY':'test-only-secret'}
+        self.schemas = PostgresTestSchemas()
+        self.path = self.schemas.create()
+        self.config = {'DATABASE_URL':self.path, 'TESTING':True, 'SECRET_KEY':'test-only-secret'}
         self.app = create_app(self.config)
         self.client = self.app.test_client()
         self.csrf = self.client.get('/api/me').json['csrf_token']
 
     def tearDown(self):
-        self.folder.cleanup()
+        self.schemas.close()
 
     def send(self, method, path, data=None, client=None, csrf=None, **kwargs):
         response = (client or self.client).open(path, method=method, json=data, buffered=True,
@@ -73,7 +70,7 @@ class PlatformTests(unittest.TestCase):
         response = self.send('POST','/api/login',{'identifier':account['email'].upper(),'password':account['password'],'remember':True})
         self.assertEqual(response.status_code,200)
         self.assertIn('Max-Age=2592000',response.headers.get('Set-Cookie'))
-        with closing(database.connect(self.path)) as db, db:
+        with closing(database.connect(self.path)) as db, database.transaction(db):
             row = db.execute('SELECT * FROM users').fetchone()
             self.assertNotEqual(row['password_hash'],account['password'].encode())
             db.execute('UPDATE sessions SET expires=0')
@@ -85,7 +82,7 @@ class PlatformTests(unittest.TestCase):
         for field,value in [('username','x'),('email','bad'),('password','short'),('password',42)]:
             self.assertEqual(self.send('POST','/api/signup',{**account,field:value}).status_code,400)
         self.assertEqual(self.send('POST','/api/signup',[1,2]).status_code,400)
-        for path in ('/accounts.sqlite3','/server.py','/accounts.secret','/migrations/001_platform.sql','/.env'):
+        for path in ('/server.py','/accounts.secret','/database/postgresql/001_platform.sql','/.env'):
             self.assertEqual(self.client.get(path).status_code,404)
         with self.client.get('/hrml') as response:
             self.assertEqual(response.status_code,200)
@@ -228,7 +225,11 @@ class PlatformTests(unittest.TestCase):
         self.send('DELETE',f"/api/datasets/{dataset['id']}")
         self.assertEqual(self.client.get(f"/api/analyses/{copied_analysis['id']}").status_code,404)
         with closing(database.connect(self.path)) as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) FROM custom_parameters WHERE dataset_id=?',(dataset['id'],)).fetchone()[0],0)
+            count = db.execute(
+                'SELECT COUNT(*) AS total FROM custom_parameters WHERE dataset_id=?',
+                (dataset['id'],),
+            ).fetchone()['total']
+            self.assertEqual(count, 0)
 
     def test_password_change_invalidates_all_sessions(self):
         account = self.register()
@@ -248,7 +249,7 @@ class PlatformTests(unittest.TestCase):
         response = self.send('POST','/api/login',{'identifier':'missing','password':'wrong'})
         self.assertEqual(response.status_code,429)
         self.assertEqual(response.headers['Retry-After'],'900')
-        with closing(database.connect(self.path)) as db, db:
+        with closing(database.connect(self.path)) as db, database.transaction(db):
             db.execute('UPDATE login_attempts SET attempted_at=0')
         self.assertEqual(self.send('POST','/api/login',{'identifier':'missing','password':'wrong'}).status_code,401)
 
@@ -331,29 +332,42 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(self.send('POST','/api/statistics/calculate',{'dataset_id':[1]}).status_code,400)
         self.assertEqual(self.client.post('/api/datasets',data='invalid',headers={'X-CSRF-Token':self.csrf,'Content-Type':'application/json'}).status_code,400)
 
-    def test_migration_preserves_legacy_users_and_sessions(self):
-        legacy_path = str(Path(self.folder.name)/'legacy.sqlite3')
+    def test_migration_preserves_existing_users_and_sessions(self):
+        legacy_path = self.schemas.create()
         salt = b'legacy-salt-12345'
         digest = password_hash('legacy-password',salt)
         token = 'existing-session-token'
-        with closing(sqlite3.connect(legacy_path)) as db, db:
-            db.executescript('''CREATE TABLE users(id INTEGER PRIMARY KEY,username TEXT COLLATE NOCASE UNIQUE,email TEXT COLLATE NOCASE UNIQUE,salt BLOB,password_hash BLOB);
-                CREATE TABLE sessions(token_hash TEXT PRIMARY KEY,user_id INTEGER REFERENCES users(id),expires REAL);''')
-            db.execute('INSERT INTO users VALUES(1,?,?,?,?)',('Legacy','legacy@example.com',salt,digest))
-            db.execute('INSERT INTO sessions VALUES(?,?,?)',(hashlib.sha256(token.encode()).hexdigest(),1,9999999999))
-        app = create_app({**self.config,'DATABASE':legacy_path})
+        with closing(database.connect(legacy_path)) as db, database.transaction(db):
+            db.execute('''CREATE TABLE users (
+                id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                username TEXT NOT NULL,
+                email TEXT NOT NULL,
+                salt BYTEA NOT NULL,
+                password_hash BYTEA NOT NULL
+            )''')
+            db.execute('''CREATE TABLE sessions (
+                token_hash TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                expires DOUBLE PRECISION NOT NULL
+            )''')
+            db.execute(
+                'INSERT INTO users(id,username,email,salt,password_hash) VALUES (1,?,?,?,?)',
+                ('Legacy','legacy@example.com',salt,digest),
+            )
+            db.execute(
+                'INSERT INTO sessions VALUES (?,?,?)',
+                (hashlib.sha256(token.encode()).hexdigest(),1,9999999999),
+            )
+        database.initialize(legacy_path)
+        app = create_app({**self.config,'DATABASE_URL':legacy_path})
         client = app.test_client()
         client.set_cookie('session',token)
         self.assertEqual(client.get('/api/me').json['user']['username'],'Legacy')
-        database.initialize(legacy_path)  # Idempotent migration.
+        database.initialize(legacy_path)
         with closing(database.connect(legacy_path)) as db:
-            self.assertEqual(db.execute('SELECT password_hash FROM users').fetchone()[0],digest)
-            self.assertEqual(db.execute('SELECT COUNT(*) FROM sessions').fetchone()[0],1)
-            self.assertEqual(db.execute('SELECT COUNT(*) FROM schema_migrations').fetchone()[0],1)
-        target = str(Path(self.folder.name)/'backup.sqlite3')
-        database.backup(legacy_path,target)
-        with closing(database.connect(target)) as db:
-            self.assertEqual(db.execute('SELECT username FROM users').fetchone()[0],'Legacy')
+            self.assertEqual(db.execute('SELECT password_hash FROM users').fetchone()['password_hash'],digest)
+            self.assertEqual(db.execute('SELECT COUNT(*) AS total FROM sessions').fetchone()['total'],1)
+            self.assertEqual(db.execute('SELECT COUNT(*) AS total FROM schema_migrations').fetchone()['total'],1)
 
 
 if __name__ == '__main__':

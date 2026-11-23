@@ -1,38 +1,49 @@
-"""Additive, transactional schema migration; original users and sessions stay intact."""
-import sqlite3
+"""PostgreSQL connections and serialized, transactional schema migrations."""
 from contextlib import closing
 from pathlib import Path
 
-MIGRATIONS = Path(__file__).parent / 'migrations'
+import psycopg
+from psycopg.rows import dict_row
+
+MIGRATIONS = Path(__file__).parent / 'database' / 'postgresql'
+PostgresError = psycopg.Error
+INTEGRITY_ERRORS = (psycopg.IntegrityError,)
 
 
-def connect(path):
-    db = sqlite3.connect(path, timeout=15)
-    db.row_factory = sqlite3.Row
-    db.execute('PRAGMA foreign_keys = ON')
-    db.execute('PRAGMA busy_timeout = 15000')
-    return db
+class PostgresConnection(psycopg.Connection):
+    def execute(self, query, params=None, **kwargs):
+        # Application queries use qmark placeholders. All query text is internal.
+        if params is not None:
+            query = query.replace('?', '%s')
+        return super().execute(query, params, **kwargs)
 
 
-def initialize(path):
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with closing(connect(path)) as db:
-        db.execute('PRAGMA journal_mode = WAL')
-        db.execute('CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)')
-        db.commit()
-        for file in sorted(MIGRATIONS.glob('*.sql')):
-            if db.execute('SELECT 1 FROM schema_migrations WHERE version=?', (file.name,)).fetchone():
-                continue
-            try:
-                db.executescript('BEGIN IMMEDIATE;\n' + file.read_text(encoding='utf-8'))
-                db.execute('INSERT INTO schema_migrations(version) VALUES (?)', (file.name,))
-                db.commit()
-            except Exception:
-                db.rollback()
-                raise
+def connect(url):
+    if not url.startswith(('postgresql://', 'postgres://')):
+        raise ValueError('DATABASE_URL must be a PostgreSQL connection URL.')
+    return PostgresConnection.connect(url, autocommit=True, row_factory=dict_row, connect_timeout=15)
 
 
-def backup(source, target):
-    """Online SQLite backup includes committed WAL state; never copy a live DB directly."""
-    with closing(connect(source)) as db, closing(sqlite3.connect(target)) as output:
-        db.backup(output)
+def transaction(connection):
+    return connection.transaction()
+
+
+def initialize(url):
+    with closing(connect(url)) as db, db.transaction():
+        # Serialize schema upgrades across API replicas starting together.
+        db.execute('SELECT pg_advisory_xact_lock(73401720)')
+        db.execute('''CREATE TABLE IF NOT EXISTS schema_migrations (
+            version TEXT PRIMARY KEY,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )''')
+        for migration in sorted(MIGRATIONS.glob('*.sql')):
+            exists = db.execute(
+                'SELECT 1 FROM schema_migrations WHERE version=?',
+                (migration.name,),
+            ).fetchone()
+            if not exists:
+                db.execute(migration.read_text(encoding='utf-8'))
+                db.execute(
+                    'INSERT INTO schema_migrations(version) VALUES (?)',
+                    (migration.name,),
+                )
