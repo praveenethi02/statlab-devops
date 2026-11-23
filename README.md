@@ -1,6 +1,6 @@
 # StatLab - Statistical Data Analysis Workspace
 
-A Python application backed by PostgreSQL, with separate frontend and backend deployments and a responsive HTML/CSS/JavaScript frontend.
+A Python application backed by PostgreSQL(as databse), with separate frontend and backend deployments and a responsive HTML/CSS/JavaScript frontend.
 
 The account schema, PBKDF2 password hash format, session tokens, remember-me behavior, and `python server.py` launch command are retained. The application requires `DATABASE_URL` and `APP_SECRET`. Plan a data migration before replacing any existing installation. Flask handles routing and validation; Waitress serves the application on Windows or Ubuntu.
 
