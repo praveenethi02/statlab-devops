@@ -10,13 +10,35 @@ pipeline {
         stage('Test') {
             steps {
                 sh '''
-                    docker run --rm -v "$WORKSPACE":/src:ro python:3.13-slim sh -ec '
-                        cp -r /src /tmp/app
-                        cd /tmp/app
-                        pip install -q -r requirements-dev.txt
-                        python -m ruff check .
-                        python -m unittest discover -v
-                    '
+                    set -eu
+                    NET="statlab-test-$BUILD_NUMBER"
+                    DB="statlab-test-db-$BUILD_NUMBER"
+                    cleanup() {
+                        docker rm -f -v "$DB" >/dev/null 2>&1 || true
+                        docker network rm "$NET" >/dev/null 2>&1 || true
+                    }
+                    trap cleanup EXIT
+
+                    docker network create "$NET"
+                    docker run -d --name "$DB" --network "$NET" \
+                        -e POSTGRES_DB=statlab -e POSTGRES_USER=statlab \
+                        -e POSTGRES_PASSWORD=test-only postgres:16
+
+                    for i in $(seq 1 30); do
+                        docker exec "$DB" pg_isready -h 127.0.0.1 -U statlab -d statlab && break
+                        sleep 2
+                    done
+                    docker exec "$DB" pg_isready -h 127.0.0.1 -U statlab -d statlab
+
+                    docker run --rm --network "$NET" \
+                        -e DATABASE_URL="postgresql://statlab:test-only@$DB:5432/statlab" \
+                        -v "$WORKSPACE":/src:ro python:3.13-slim sh -ec '
+                            cp -r /src /tmp/app
+                            cd /tmp/app
+                            pip install -q -r requirements-dev.txt
+                            python -m ruff check .
+                            python -m unittest discover -v
+                        '
                 '''
             }
         }
